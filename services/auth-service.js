@@ -109,16 +109,16 @@ class AuthService {
     const email = payload.email;
 
     try {
-      // Check if account already exists when in register tab
-      try {
-        const emailQuery = await db.ref('users').orderByChild('profile/email').equalTo(email).once('value');
-        if (currentMode === 'register' && emailQuery.exists()) {
-          window.dispatchEvent(new CustomEvent('google-signin-failed', { 
-            detail: { message: 'This Google account is already registered. Please sign in from the Login tab.' } 
-          }));
-          return;
-        }
-      } catch (checkErr) {}
+      // Check if email is already in database
+      const emailQuery = await db.ref('users').orderByChild('profile/email').equalTo(email).once('value');
+      const exists = emailQuery.exists();
+
+      if (currentMode === 'register' && exists) {
+        window.dispatchEvent(new CustomEvent('google-signin-failed', { 
+          detail: { message: 'This Google account is already registered. Please sign in from the Login tab.' } 
+        }));
+        return;
+      }
 
       const activeUser = {
         uid: payload.sub,
@@ -221,7 +221,7 @@ class AuthService {
       case 'auth/wrong-password':
       case 'auth/invalid-credential':
       case 'auth/invalid-login-credentials':
-        return 'Wrong password. If you signed up with Google, use Forgot Password to set a password.';
+        return 'Wrong password. Please check your password and try again.';
       case 'auth/user-not-found':
         return 'No account found with this email. Please sign up first.';
       case 'auth/email-already-in-use':
@@ -262,7 +262,30 @@ class AuthService {
     }
   }
 
+  // Exact Method Detection (Screenshot 7 & 8 Logic Fix)
   async login(email, password) {
+    // 1. Check if user signed up with Google in Firebase
+    try {
+      const methods = await auth.fetchSignInMethodsForEmail(email);
+      const checkRef = await db.ref('users').orderByChild('profile/email').equalTo(email).once('value');
+      
+      let isGoogleOnly = methods.includes('google.com') && !methods.includes('password');
+
+      if (!isGoogleOnly && checkRef.exists()) {
+        const uData = Object.values(checkRef.val())[0];
+        if (uData.profile?.authMethod === 'google') {
+          isGoogleOnly = true;
+        }
+      }
+
+      if (isGoogleOnly) {
+        throw new Error('Wrong password. If you signed up with Google, use Forgot Password to set a password.');
+      }
+    } catch (err) {
+      if (err.message.includes('signed up with Google')) throw err;
+    }
+
+    // 2. Normal Email/Password Login
     try {
       const userCredential = await auth.signInWithEmailAndPassword(email, password);
       const user = userCredential.user;
@@ -278,17 +301,6 @@ class AuthService {
       this._setLocalUser(userObj);
       return user;
     } catch (error) {
-      try {
-        const checkRef = await db.ref('users').orderByChild('profile/email').equalTo(email).once('value');
-        if (checkRef.exists()) {
-          const uData = Object.values(checkRef.val())[0];
-          if (uData.profile?.authMethod === 'google') {
-            throw new Error('Wrong password. If you signed up with Google, use Forgot Password to set a password.');
-          }
-        }
-      } catch (e) {
-        if (e.message.includes('signed up with Google')) throw e;
-      }
       throw new Error(this.getFriendlyErrorMessage(error));
     }
   }
